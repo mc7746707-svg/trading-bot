@@ -74,16 +74,21 @@ def rsi(values):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 # 🔥 REAL SIGNAL
-data = get_data(symbol)
+def check_signal(symbol):
 
-if not data or len(data) < 10:
-    return None
+    data = get_data(symbol)
 
-closes = [x["close"] for x in data if "close" in x]
+    if not data or len(data) < 10:
+        return None
 
-ema9 = ema(closes[:9], 9)
-ema21 = ema(closes[:21], 21)
-r = rsi(closes[:14])
+    closes = [x["close"] for x in data if "close" in x]
+
+    ema9 = ema(closes[:9], 9)
+    ema21 = ema(closes[:21], 21)
+    r = rsi(closes[:14])
+
+    if ema9 is None or ema21 is None or r is None:
+        return None
 
     c1, c2, c3 = data[2], data[1], data[0]
 
@@ -92,10 +97,24 @@ r = rsi(closes[:14])
     o3, c3v = float(c3['open']), float(c3['close'])
 
     body = abs(c3v - o3)
+
+    if "high" not in c3 or "low" not in c3:
+        return None
+
     rng = abs(float(c3['high']) - float(c3['low']))
 
     if body < (rng * 0.4):
         return None
+
+    # 🟢 BUY
+    if c1v > o1 and c2v > o2 and c3v > o3 and ema9 > ema21 and r > 50:
+        return "📈 BUY"
+
+    # 🔴 SELL
+    if c1v < o1 and c2v < o2 and c3v < o3 and ema9 < ema21 and r < 50:
+        return "📉 SELL"
+
+    return None
 
     # 🟢 BUY
     if c1v > o1 and c2v > o2 and c3v > o3 and ema9 > ema21 and r < 65:
