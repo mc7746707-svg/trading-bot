@@ -8,7 +8,7 @@ API_KEY = "58f6ae48f9c0492882d9fbfe566e6080"
 BOT_TOKEN = "8739755982:AAGmCLaxclmC4l3gSovoIWhxBHBDtOT_oqg"
 CHAT_ID = "6181352243"
 
-bot = telebot.TeleBot(8739755982:AAGmCLaxclmC4l3gSovoIWhxBHBDtOT_oqg)
+bot = telebot.TeleBot("8739755982:AAAmcLaxclmC413gSovoIWxBHBDtOT_oqg")
 
 # OTC STYLE PAIRS
 SYMBOLS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD"]
