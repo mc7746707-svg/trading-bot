@@ -91,7 +91,7 @@ def ai_confirm(pair, signal):
     try:
         prompt = f"Confirm this binary trading signal: {pair} {signal}. Reply BUY or SELL with confidence %."
         res = client.chat.completions.create(
-            model="gpt-5.3",
+            model="gpt-4o-mini"
             messages=[{"role": "user", "content": prompt}]
         )
         return res.choices[0].message.content
