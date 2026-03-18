@@ -176,9 +176,9 @@ AI: {ai}
 """
 
             for user in auto_users:
-                await app.bot.send_message(user, text)
+                await app.bot.send_message(chat_id=user, text=text)
 
-            await app.bot.send_message(chat_id=CHAT_ID, text=text)
+            await app.bot.send_message(chat_id=int(CHAT_ID), text=text)
 
 # ===== MAIN =====
 def main():
@@ -192,9 +192,10 @@ def main():
 
     print("BOT RUNNING SUCCESS ✅")
 
-    application.run_polling()
+application.run_polling()
 
 # ===== RUN =====
 if __name__ == "__main__":
+    print("STARTING BOT 🔥")
     threading.Thread(target=run_web).start()
     main()
