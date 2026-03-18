@@ -1,226 +1,186 @@
 import requests
-import telebot
-import time
-import threading
-from datetime import datetime
+import pandas as pd
+import ta
+from datetime import datetime, timedelta
 import pytz
-from telebot.types import ReplyKeyboardMarkup
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
-import os
 
-# ===== ENV =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-API_KEY = os.getenv("TWELVE_API")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+# ===== CONFIG =====
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
+API_KEY = "YOUR_TWELVE_DATA_API_KEY"
+OPENAI_KEY = "YOUR_OPENAI_API_KEY"
 
-bot = telebot.TeleBot(BOT_TOKEN)
 client = OpenAI(api_key=OPENAI_KEY)
 
-SYMBOLS = ["EUR/USD", "GBP/USD", "USD/JPY"]
+SYMBOLS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CHF"]
+INTERVAL = "1min"
+
 last_signal = {}
-user_time = {}
+auto_users = set()
 
-# ===== IST TIME =====
-def get_ist_time():
+# ===== INDIA TIME =====
+def get_entry_time():
     ist = pytz.timezone("Asia/Kolkata")
-    return datetime.now(ist).strftime("%H:%M:%S")
-
-# ===== MENU =====
-def menu():
-    m = ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("🔥 Get Signal", "⏱ Set Time")
-    return m
-
-def time_menu():
-    m = ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("5 sec", "10 sec")
-    m.add("15 sec", "1 min")
-    return m
-
-# ===== START =====
-@bot.message_handler(commands=['start'])
-def start(msg):
-    bot.send_message(msg.chat.id, "🤖 PRO BOT READY", reply_markup=menu())
-
-# ===== TIME =====
-@bot.message_handler(func=lambda m: m.text == "⏱ Set Time")
-def set_time(msg):
-    bot.send_message(msg.chat.id, "Select Time", reply_markup=time_menu())
-
-@bot.message_handler(func=lambda m: m.text in ["5 sec","10 sec","15 sec","1 min"])
-def save_time(msg):
-    user_time[msg.chat.id] = msg.text
-    bot.send_message(msg.chat.id, f"✅ Time set: {msg.text}", reply_markup=menu())
+    now = datetime.now(ist) + timedelta(minutes=1)
+    return now.strftime("%H:%M:%S")
 
 # ===== DATA =====
-def get_data(symbol):
-    try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=20&apikey={API_KEY}"
-        res = requests.get(url).json()
-        return res.get("values", [])
-    except:
-        return []
+def get_data(pair):
+    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval={INTERVAL}&apikey={API_KEY}&outputsize=100"
+    res = requests.get(url).json()
 
-# ===== EMA =====
-def ema(data, period):
-    if len(data) < period:
-        return 0
-    k = 2 / (period + 1)
-    ema_val = data[0]
-    for price in data:
-        ema_val = price * k + ema_val * (1 - k)
-    return ema_val
+    df = pd.DataFrame(res['values'])
+    df = df.astype(float)
+    df = df.iloc[::-1]
 
-# ===== RSI =====
-def rsi(data):
-    gains, losses = [], []
-    for i in range(1, len(data)):
-        diff = data[i] - data[i-1]
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
+    return df
 
-    if not gains or not losses:
-        return 50
+# ===== STRONG SIGNAL LOGIC =====
+def check_signal(pair):
+    df = get_data(pair)
 
-    avg_gain = sum(gains)/len(gains)
-    avg_loss = sum(losses)/len(losses)
+    # Indicators
+    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=7).rsi()
+    df['ema9'] = ta.trend.EMAIndicator(df['close'], window=9).ema_indicator()
+    df['ema21'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
 
-    if avg_loss == 0:
-        return 100
+    df['body'] = abs(df['close'] - df['open'])
+    df['range'] = df['high'] - df['low']
+    df['small'] = df['body'] < df['range'] * 0.4
 
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    c0 = df.iloc[-1]
+    c1 = df.iloc[-2]
+    c2 = df.iloc[-3]
 
-# ===== SIGNAL (PRO LOGIC) =====
-def check_signal(symbol):
-    data = get_data(symbol)
+    # Trend
+    bullTrend = c0['ema9'] > c0['ema21']
+    bearTrend = c0['ema9'] < c0['ema21']
 
-    if len(data) < 10:
-        return None
+    # Momentum strong filter
+    bullMom = c0['rsi'] > 55
+    bearMom = c0['rsi'] < 45
 
-    closes = [float(x["close"]) for x in data]
+    # Strong breakout candle
+    bullConfirm = c1['close'] > c1['open'] and (c1['close'] - c1['open']) > (c2['range'] * 0.6) and c1['close'] > c2['high']
+    bearConfirm = c1['close'] < c1['open'] and (c1['open'] - c1['close']) > (c2['range'] * 0.6) and c1['close'] < c2['low']
 
-    ema9 = ema(closes, 9)
-    ema21 = ema(closes, 21)
-    r = rsi(closes)
+    # FINAL SIGNAL
+    if c2['small'] and bullConfirm and bullTrend and bullMom:
+        return "BUY"
 
-    c1, c2, c3 = data[2], data[1], data[0]
-
-    o1, c1v = float(c1['open']), float(c1['close'])
-    o2, c2v = float(c2['open']), float(c2['close'])
-    o3, c3v = float(c3['open']), float(c3['close'])
-
-    h3 = float(c3['high'])
-    l3 = float(c3['low'])
-
-    body = abs(c3v - o3)
-    rng = abs(h3 - l3)
-
-    if body < (rng * 0.5):
-        return None
-
-    bullish = c3v > o3 and c2v < o2 and c3v > o2
-    bearish = c3v < o3 and c2v > o2 and c3v < o2
-
-    if (c1v > o1 and c2v > o2 and c3v > o3) or bullish:
-        if ema9 > ema21 and r < 65:
-            return "📈 BUY (STRONG)"
-
-    if (c1v < o1 and c2v < o2 and c3v < o3) or bearish:
-        if ema9 < ema21 and r > 35:
-            return "📉 SELL (STRONG)"
+    if c2['small'] and bearConfirm and bearTrend and bearMom:
+        return "SELL"
 
     return None
 
-# ===== AI =====
+# ===== AI CONFIRM =====
 def ai_confirm(pair, sig):
     try:
         res = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": f"{pair} {sig} strong or weak? one word"}
-            ]
+            messages=[{"role": "user", "content": f"{pair} {sig} strong or weak trading signal?"}]
         )
         return res.choices[0].message.content.strip()
     except:
-        return "AI error"
+        return "AI unavailable"
 
-# ===== MANUAL BUTTON =====
-@bot.message_handler(func=lambda m: m.text == "🔥 Get Signal")
-def manual_signal(msg):
-    text = "🔥 LIVE SIGNAL\n\n"
+# ===== BUTTON UI =====
+keyboard = [
+    ["🔥 Get Signal"],
+    ["🤖 Auto ON", "⛔ Auto OFF"]
+]
+markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-    for pair in SYMBOLS:
-        sig = check_signal(pair)
+# ===== START =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 PRO BOT READY (IST TIME)", reply_markup=markup)
 
-        if sig:
-            ai = ai_confirm(pair, sig)
-            now = get_ist_time()
-            expiry = user_time.get(msg.chat.id, "1 min")
+# ===== HANDLE =====
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    text = update.message.text
 
-            text += f"""
-Pair: {pair}
-Signal: {sig}
-AI: {ai}
-Entry: {now} (IST)
-Expiry: {expiry}
+    if text == "🔥 Get Signal":
+        msg = "🔥 LIVE SIGNAL\n\n"
 
-"""
-
-    if text == "🔥 LIVE SIGNAL\n\n":
-        text += "No strong signal ⚪"
-
-    bot.send_message(msg.chat.id, text)
-
-# ===== AUTO =====
-def live_loop():
-    while True:
         for pair in SYMBOLS:
             sig = check_signal(pair)
 
-            if sig and last_signal.get(pair) != sig:
-                last_signal[pair] = sig
-
+            if sig:
                 ai = ai_confirm(pair, sig)
-                now = get_ist_time()
 
-                text = f"""
-🔥 VIP AUTO SIGNAL
-Pair: {pair}
-Signal: {sig}
+                # AI filter
+                if sig == "BUY" and "BUY" not in ai.upper():
+                    continue
+                if sig == "SELL" and "SELL" not in ai.upper():
+                    continue
+
+                entry = get_entry_time()
+
+                msg += f"""📊 {pair}
+Signal: {'🟢 BUY' if sig=='BUY' else '🔴 SELL'}
 AI: {ai}
+⏱ Entry: {entry} (IST)
+⏳ Expiry: 2 min
 
-⏱ Entry: {now} (IST)
-⌛ Expiry: 1 min
 """
 
-                try:
-                    bot.send_message(int(CHAT_ID), text)
-                except:
-                    pass
+        if msg == "🔥 LIVE SIGNAL\n\n":
+            msg += "⚪ No strong signal"
 
-        time.sleep(10)
+        await update.message.reply_text(msg)
+        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# ===== WEB FIX =====
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot Running")
+    elif text == "🤖 Auto ON":
+        auto_users.add(chat_id)
+        await update.message.reply_text("✅ Auto ON")
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    server.serve_forever()
+    elif text == "⛔ Auto OFF":
+        auto_users.discard(chat_id)
+        await update.message.reply_text("❌ Auto OFF")
 
-# ===== START =====
-threading.Thread(target=run_server).start()
-threading.Thread(target=live_loop).start()
+# ===== AUTO SIGNAL =====
+async def auto_signal(app):
+    for pair in SYMBOLS:
+        sig = check_signal(pair)
 
-print("🔥 PRO BOT RUNNING...")
+        if sig and last_signal.get(pair) != sig:
+            last_signal[pair] = sig
 
-bot.polling()
+            ai = ai_confirm(pair, sig)
+
+            if sig == "BUY" and "BUY" not in ai.upper():
+                continue
+            if sig == "SELL" and "SELL" not in ai.upper():
+                continue
+
+            entry = get_entry_time()
+
+            text = f"""🔥 VIP AUTO SIGNAL
+
+📊 {pair}
+Signal: {'🟢 BUY' if sig=='BUY' else '🔴 SELL'}
+AI: {ai}
+⏱ Entry: {entry} (IST)
+⏳ Expiry: 2 min
+"""
+
+            for user in auto_users:
+                await app.bot.send_message(user, text)
+
+            await app.bot.send_message(chat_id=CHAT_ID, text=text)
+
+# ===== RUN =====
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT, handle))
+
+app.job_queue.run_repeating(lambda ctx: ctx.application.create_task(auto_signal(app)), interval=60, first=10)
+
+print("BOT RUNNING (IST)...")
+
+app.run_polling()
