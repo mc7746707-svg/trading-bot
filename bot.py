@@ -7,7 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 # ===== TELEGRAM =====
 TOKEN = "8243137774:AAGhFsJPDmNv4z0WfahLauIcJ3b_kkgc_18"
-CHAT ID = "6181352243"
+CHAT_ID = "6181352243"
 # ===== PAIRS =====
 PAIRS = [
     "EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X",
