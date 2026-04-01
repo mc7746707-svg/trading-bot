@@ -3,8 +3,8 @@ from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "PUT_NEW_TOKEN"
-
+TOKEN = "8243137774:AAHCKkESoXOT-Fy0_8hpkAExeiqFzNOc1MQ"
+CHAT_ID = "6181352243"
 PAIRS = [
     "EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X",
     "EURJPY=X","GBPJPY=X","EURGBP=X","AUDJPY=X"
