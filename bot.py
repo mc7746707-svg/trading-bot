@@ -110,8 +110,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if signal:
                     time_now = datetime.now().strftime("%H:%M:%S")
 
-                    msg = f"""
-📊 STRONG SIGNAL
+                    msg = f"""📊 STRONG SIGNAL
 
 Pair: {pair.replace('=X','')}
 Signal: {signal}
@@ -122,11 +121,10 @@ Time: {time_now} IST
                     await update.message.reply_text(msg)
                     return
 
-            except:
-                pass
+            except Exception as e:
+                print(e)
 
         await update.message.reply_text("No Strong Signal ❌")
-
 # ===== MAIN =====
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
