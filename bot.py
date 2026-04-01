@@ -6,8 +6,8 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ===== TELEGRAM =====
-TOKEN = "YOUR_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+TOKEN = "8243137774:AAFPyFcalKy1hdQ3ir9pE-R-8XN7WfGR_Nw"
+CHAT_ID = "6181352243"
 
 # ===== PAIRS =====
 PAIRS = [
