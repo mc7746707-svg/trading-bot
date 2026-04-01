@@ -89,3 +89,41 @@ EXPIRY: 1 MIN
             continue
 
     time.sleep(60)
+
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+running = False
+
+keyboard = [
+    ["▶️ Start Scan", "⏸ Stop Scan"],
+    ["📊 Check Signal"]
+]
+
+reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot Ready 🔥", reply_markup=reply_markup)
+
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global running
+
+    text = update.message.text
+
+    if text == "▶️ Start Scan":
+        running = True
+        await update.message.reply_text("Scanning Started 🔍")
+
+    elif text == "⏸ Stop Scan":
+        running = False
+        await update.message.reply_text("Scanning Stopped ❌")
+
+    elif text == "📊 Check Signal":
+        await update.message.reply_text("Checking Market...")
+
+app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT, handle))
+
+app.run_polling()
