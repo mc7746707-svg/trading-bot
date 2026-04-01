@@ -23,27 +23,27 @@ reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ===== DATA =====
 def get_data(pair):
-url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
-data = requests.get(url).json()
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
+    data = requests.get(url).json()
 
-candles = data["chart"]["result"][0]["indicators"]["quote"][0]
+    candles = data["chart"]["result"][0]["indicators"]["quote"][0]
 
-df = pd.DataFrame({
-"open": candles["open"],
-"close": candles["close"],
-"high": candles["high"],
-"low": candles["low"]
-})
+    df = pd.DataFrame({
+        "open": candles["open"],
+        "close": candles["close"],
+        "high": candles["high"],
+        "low": candles["low"]
+    })
 
-return df.dropna()
-
+    return df.dropna()
+    
 # ===== INDICATORS =====
 def rsi(df, period=14):
-delta = df["close"].diff()
-gain = delta.where(delta > 0, 0).rolling(period).mean()
-loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-rs = gain / loss
-return 100 - (100 / (1 + rs))
+    delta = df["close"].diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 def ema(df, period=20):
 return df["close"].ewm(span=period).mean()
