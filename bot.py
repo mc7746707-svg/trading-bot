@@ -1,3 +1,4 @@
+import asyncio
 import time
 import requests
 import pandas as pd
