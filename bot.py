@@ -1,4 +1,4 @@
-import asyncio
+    import asyncio
 import requests
 import pandas as pd
 from datetime import datetime
@@ -15,21 +15,19 @@ PAIRS = [
 ]
 
 running = False
-mode = "REAL"
 
-# ===== BUTTON UI =====
+# ===== BUTTONS =====
 keyboard = [
-    ["▶️ Start Real", "🟠 Start OTC"],
-    ["⏸ Stop"],
-    ["📊 Check Signal"]
+    ["▶ Start Scan", "⏹ Stop"],
+    ["📊 Signal"]
 ]
-
 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ===== DATA =====
+# ===== DATA FETCH =====
 def get_data(pair):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
     data = requests.get(url).json()
+
     candles = data["chart"]["result"][0]["indicators"]["quote"][0]
 
     df = pd.DataFrame({
@@ -49,112 +47,110 @@ def rsi(df, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def ma(df):
-    return df["close"].rolling(20).mean()
+def ma(df, period=20):
+    return df["close"].rolling(period).mean()
 
-# ===== PATTERNS =====
+# ===== PATTERN =====
 def bullish_engulfing(df):
-    return df["close"].iloc[-1] > df["open"].iloc[-1] and df["close"].iloc[-2] < df["open"].iloc[-2]
+    return (
+        df["close"].iloc[-2] < df["open"].iloc[-2] and
+        df["close"].iloc[-1] > df["open"].iloc[-1] and
+        df["close"].iloc[-1] > df["open"].iloc[-2]
+    )
 
 def bearish_engulfing(df):
-    return df["close"].iloc[-1] < df["open"].iloc[-1] and df["close"].iloc[-2] > df["open"].iloc[-2]
-
-def hammer(df):
-    body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
-    wick = df["open"].iloc[-1] - df["low"].iloc[-1]
-    return wick > body * 2
-
-# ===== FILTER =====
-def strong_candle(df):
-    body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
-    avg = (df["high"] - df["low"]).mean()
-    return body > avg * 0.5
+    return (
+        df["close"].iloc[-2] > df["open"].iloc[-2] and
+        df["close"].iloc[-1] < df["open"].iloc[-1] and
+        df["close"].iloc[-1] < df["open"].iloc[-2]
+    )
 
 # ===== SIGNAL =====
-def check_signal(df):
+def get_signal(df):
     df["RSI"] = rsi(df)
     df["MA"] = ma(df)
 
-    last_rsi = df["RSI"].iloc[-1]
-    last_close = df["close"].iloc[-1]
-    last_ma = df["MA"].iloc[-1]
-
-    # BUY
-    if (bullish_engulfing(df) or hammer(df)) and strong_candle(df):
-        if last_rsi < 35 and last_close > last_ma:
-            return "BUY 📈"
-
-    # SELL
-    if bearish_engulfing(df) and strong_candle(df):
-        if last_rsi > 65 and last_close < last_ma:
-            return "SELL 📉"
-
+    if bullish_engulfing(df) and df["RSI"].iloc[-1] < 30:
+        return "BUY"
+    elif bearish_engulfing(df) and df["RSI"].iloc[-1] > 70:
+        return "SELL"
     return None
 
-# ===== START =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot Ready", reply_markup=reply_markup)
-
-# ===== HANDLE =====
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global running, mode
-    text = update.message.text
-
-    if text == "▶️ Start Real":
-        running = True
-        mode = "REAL"
-        await update.message.reply_text("📊 Real Market Started")
-
-    elif text == "🟠 Start OTC":
-        running = True
-        mode = "OTC"
-        await update.message.reply_text("🟠 OTC Mode Started (High Filter)")
-
-    elif text == "⏸ Stop":
-        running = False
-        await update.message.reply_text("Stopped ❌")
-
-    elif text == "📊 Check Signal":
-        msg = "📊 Signals:\n\n"
-        for pair in PAIRS:
-            df = get_data(pair)
-            signal = check_signal(df)
-            if signal:
-                msg += f"{pair} → {signal}\n"
-        await update.message.reply_text(msg)
-
-    # ===== AUTO LOOP =====
+# ===== SCAN =====
+async def scan(update):
+    global running
     while running:
         for pair in PAIRS:
-            df = get_data(pair)
-            signal = check_signal(df)
+            try:
+                df = get_data(pair)
+                signal = get_signal(df)
 
-            # OTC extra filter
-            if mode == "OTC":
-                if not strong_candle(df):
-                    continue
+                if signal:
+                    time_now = datetime.now().strftime("%H:%M:%S")
 
-            if signal:
-                time_now = datetime.now().strftime("%H:%M:%S")
+                    msg = f"""
+🔥 SIGNAL ALERT
 
-                msg = f"""
-🔥 {mode} SIGNAL 🔥
-Pair: {pair}
+Pair: {pair.replace('=X','')}
 Signal: {signal}
-Entry: {time_now} (IST)
-Expiry: 1 Min
-                """
+Time (India): {time_now}
+Expiry: 1 min
+"""
+                    await update.message.reply_text(msg)
 
-                await update.message.reply_text(msg)
+            except:
+                pass
 
         await asyncio.sleep(60)
 
+# ===== START =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot Started ✅", reply_markup=reply_markup)
+
+# ===== HANDLE BUTTON =====
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global running
+    text = update.message.text
+
+    if text == "▶ Start Scan":
+        running = True
+        await update.message.reply_text("Scanning started 🔍")
+        asyncio.create_task(scan(update))
+
+    elif text == "⏹ Stop":
+        running = False
+        await update.message.reply_text("Stopped ❌")
+
+    elif text == "📊 Signal":
+        for pair in PAIRS:
+            try:
+                df = get_data(pair)
+                signal = get_signal(df)
+
+                if signal:
+                    time_now = datetime.now().strftime("%H:%M:%S")
+
+                    msg = f"""
+📊 QUICK SIGNAL
+
+Pair: {pair.replace('=X','')}
+Signal: {signal}
+Time: {time_now}
+"""
+                    await update.message.reply_text(msg)
+                    return
+            except:
+                pass
+
+        await update.message.reply_text("No signal ❌")
+
 # ===== MAIN =====
-app = ApplicationBuilder().token(TOKEN).build()
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT, handle))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT, handle))
 
-print("Bot Running...")
-app.run_polling() 
-    
+    print("Bot Running...")
+
+    app.run_polling()
