@@ -1,128 +1,124 @@
-
+import time
 import requests
 import pandas as pd
-import time
-from telegram import Bot
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime
 
-# ===== SETTINGS =====
-TOKEN = "YOUR_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+# 8 PAIRS
+PAIRS = [
+    "EURUSD=X",
+    "GBPUSD=X",
+    "USDJPY=X",
+    "AUDUSD=X",
+    "EURJPY=X",
+    "GBPJPY=X",
+    "EURGBP=X",
+    "AUDJPY=X"
+]
 
-bot = Bot(token=TOKEN)
-
-OTC_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF"]
-REAL_PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-
-INTERVAL = "1m"
-
-# ===== TIME =====
-def get_time():
-    ist = pytz.timezone("Asia/Kolkata")
-    return datetime.now(ist)
-
-# ===== DATA =====
-def get_data(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit=100"
+# DATA FETCH
+def get_data(pair):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
     data = requests.get(url).json()
+    candles = data["chart"]["result"][0]["indicators"]["quote"][0]
 
-    df = pd.DataFrame(data)
-    df = df.iloc[:, :5]
-    df.columns = ["time","open","high","low","close"]
+    df = pd.DataFrame({
+        "open": candles["open"],
+        "high": candles["high"],
+        "low": candles["low"],
+        "close": candles["close"]
+    }).dropna()
 
-    df = df.astype(float)
     return df
 
-# ===== RSI =====
+# RSI
 def rsi(df, period=14):
     delta = df["close"].diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta).clip(lower=0).rolling(period).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ===== EMA =====
-def ema(df, period=50):
-    return df["close"].ewm(span=period).mean()
+# PATTERNS
+def bullish_engulfing(p, c):
+    return p["close"] < p["open"] and c["close"] > c["open"] and c["close"] > p["open"]
 
-# ===== PATTERNS =====
-def bullish(df):
-    p, c = df.iloc[-2], df.iloc[-1]
-    return p.close < p.open and c.close > c.open
+def bearish_engulfing(p, c):
+    return p["close"] > p["open"] and c["close"] < c["open"] and c["close"] < p["open"]
 
-def bearish(df):
-    p, c = df.iloc[-2], df.iloc[-1]
-    return p.close > p.open and c.close < c.open
+def hammer(c):
+    body = abs(c["close"] - c["open"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    upper = c["high"] - max(c["open"], c["close"])
+    return lower > body * 2 and upper < body
 
-def hammer(df):
+def shooting_star(c):
+    body = abs(c["close"] - c["open"])
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    return upper > body * 2 and lower < body
+
+# SUPPORT / RESISTANCE
+def support_resistance(df):
+    support = df["low"].rolling(10).min().iloc[-1]
+    resistance = df["high"].rolling(10).max().iloc[-1]
+    return support, resistance
+
+# FAKE BREAKOUT
+def fake_breakout(c, support, resistance):
+    if c["low"] < support and c["close"] > support:
+        return "BUY"
+    if c["high"] > resistance and c["close"] < resistance:
+        return "SELL"
+    return None
+
+# SIGNAL CHECK
+def check_pair(pair):
+    df = get_data(pair)
+    df["RSI"] = rsi(df)
+
+    p = df.iloc[-2]
     c = df.iloc[-1]
-    return (c.open - c.low) > 2*(c.close - c.open)
 
-def shooting(df):
-    c = df.iloc[-1]
-    return (c.high - c.open) > 2*(c.open - c.close)
+    support, resistance = support_resistance(df)
+    fake = fake_breakout(c, support, resistance)
 
-# ===== SIGNAL =====
-def signal(df, mode):
-    price = df["close"].iloc[-1]
+    # BUY
+    if bullish_engulfing(p, c) and c["RSI"] < 35 and c["close"] > support:
+        return "BUY 📈 (Engulfing)"
 
-    if mode == "REAL":
-        r = rsi(df).iloc[-1]
-        e = ema(df).iloc[-1]
+    if hammer(c) and c["RSI"] < 30 and fake == "BUY":
+        return "BUY 📈 (Hammer + Fake Breakout)"
 
-        if bullish(df) and r < 40 and price > e:
-            return "🔥 BUY (REAL)"
+    # SELL
+    if bearish_engulfing(p, c) and c["RSI"] > 65 and c["close"] < resistance:
+        return "SELL 📉 (Engulfing)"
 
-        if bearish(df) and r > 60 and price < e:
-            return "🔻 SELL (REAL)"
-
-    if mode == "OTC":
-        r = rsi(df,7).iloc[-1]
-
-        if hammer(df) and r < 30:
-            return "⚡ BUY (OTC)"
-
-        if shooting(df) and r > 70:
-            return "⚡ SELL (OTC)"
+    if shooting_star(c) and c["RSI"] > 70 and fake == "SELL":
+        return "SELL 📉 (Shooting Star + Fake Breakout)"
 
     return None
 
-# ===== LOOP =====
-last = {}
-
+# MAIN LOOP
 while True:
-    try:
-        now = get_time()
+    print("\n🔍 SCANNING MARKET...\n")
 
-        # REAL
-        for pair in REAL_PAIRS:
-            df = get_data(pair)
-            s = signal(df, "REAL")
+    for pair in PAIRS:
+        try:
+            signal = check_pair(pair)
 
-            if s and last.get(pair) != s:
-                entry = now.strftime("%H:%M:%S")
-                expiry = (now + timedelta(minutes=3)).strftime("%H:%M:%S")
+            if signal:
+                now = datetime.now().strftime("%I:%M:%S %p")
 
-                msg = f"{pair}\n{s}\nEntry: {entry}\nExpiry: {expiry}"
-                bot.send_message(chat_id=CHAT_ID, text=msg)
-                last[pair] = s
+                print(f"""
+🔥 STRONG SIGNAL
+PAIR: {pair.replace('=X','')}
+SIGNAL: {signal}
+ENTRY: NEXT CANDLE
+TIME (IST): {now}
+EXPIRY: 1 MIN
+""")
 
-        # OTC
-        for pair in OTC_PAIRS:
-            df = get_data("BTCUSDT")
-            s = signal(df, "OTC")
+        except Exception as e:
+            print(f"Error in {pair}: {e}")
 
-            if s and last.get(pair) != s:
-                entry = now.strftime("%H:%M:%S")
-                expiry = (now + timedelta(minutes=1)).strftime("%H:%M:%S")
-
-                msg = f"{pair} OTC\n{s}\nEntry: {entry}\nExpiry: {expiry}"
-                bot.send_message(chat_id=CHAT_ID, text=msg)
-                last[pair] = s
-
-        time.sleep(60)
-
-    except Exception as e:
-        print(e)
-        time.sleep(10)
+    time.sleep(60)
