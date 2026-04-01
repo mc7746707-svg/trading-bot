@@ -1,116 +1,84 @@
 import requests
-import pandas as pd
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ===== TELEGRAM =====
-TOKEN = "8243137774:AAHCKkESoXOT-Fy0_8hpkAExeiqFzNOc1MQ"
-CHAT_ID = "6181352243"
-# ===== PAIRS =====
+TOKEN = "PUT_NEW_TOKEN"
+
 PAIRS = [
-    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
-    "EURJPY=X", "GBPJPY=X", "EURGBP=X", "AUDJPY=X"
+    "EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X",
+    "EURJPY=X","GBPJPY=X","EURGBP=X","AUDJPY=X"
 ]
 
-# ===== KEYBOARD =====
 keyboard = [
-    ["▶ Start Scan", "⏹ Stop"],
+    ["▶ Start Scan","⏹ Stop"],
     ["📊 Strong Signal"]
 ]
 
 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-running = False
-
-# ===== DATA =====
+# ===== GET DATA =====
 def get_data(pair):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
-        res = requests.get(url, timeout=10)
-
-        if res.status_code != 200:
-            return None
-
-        data = res.json()
-
-        if not data.get("chart") or not data["chart"].get("result"):
-            return None
+        data = requests.get(url).json()
 
         candles = data["chart"]["result"][0]["indicators"]["quote"][0]
 
-        df = pd.DataFrame({
-            "open": candles["open"],
-            "close": candles["close"],
-            "high": candles["high"],
-            "low": candles["low"]
-        })
-
-        return df.dropna()
+        return candles
 
     except:
         return None
 
 # ===== RSI =====
-def rsi(df, period=14):
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
+def rsi(close, period=14):
+    gains, losses = [], []
+
+    for i in range(1, len(close)):
+        diff = close[i] - close[i-1]
+        gains.append(max(diff,0))
+        losses.append(abs(min(diff,0)))
+
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period if sum(losses[-period:]) != 0 else 1
+
+    rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 # ===== SUPPORT / RESISTANCE =====
-def support_resistance(df):
-    df["support"] = df["low"].rolling(20).min()
-    df["resistance"] = df["high"].rolling(20).max()
-    return df
+def support_resistance(low, high):
+    support = min(low[-20:])
+    resistance = max(high[-20:])
+    return support, resistance
 
-# ===== CANDLE PATTERNS =====
-def bullish_engulfing(df):
-    return (
-        df["close"].iloc[-2] < df["open"].iloc[-2] and
-        df["close"].iloc[-1] > df["open"].iloc[-1] and
-        df["close"].iloc[-1] > df["open"].iloc[-2] and
-        df["open"].iloc[-1] < df["close"].iloc[-2]
-    )
+# ===== ENGULFING =====
+def bullish_engulfing(o,c):
+    return c[-2]<o[-2] and c[-1]>o[-1] and c[-1]>o[-2] and o[-1]<c[-2]
 
-def bearish_engulfing(df):
-    return (
-        df["close"].iloc[-2] > df["open"].iloc[-2] and
-        df["close"].iloc[-1] < df["open"].iloc[-1] and
-        df["open"].iloc[-1] > df["close"].iloc[-2] and
-        df["close"].iloc[-1] < df["open"].iloc[-2]
-    )
+def bearish_engulfing(o,c):
+    return c[-2]>o[-2] and c[-1]<o[-1] and o[-1]>c[-2] and c[-1]<o[-2]
 
-# ===== STRONG CANDLE FILTER =====
-def strong_candle(df):
-    body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
-    range_ = df["high"].iloc[-1] - df["low"].iloc[-1]
-    return body > range_ * 0.4  # relaxed
+# ===== SIGNAL =====
+def get_signal(data):
+    close = data["close"]
+    open_ = data["open"]
+    high = data["high"]
+    low = data["low"]
 
-# ===== SIGNAL LOGIC =====
-def get_signal(df):
-    df["RSI"] = rsi(df)
-    df = support_resistance(df)
+    if None in close[-20:]:
+        return None
 
-    last = df.iloc[-1]
+    rsi_val = rsi(close)
+    support, resistance = support_resistance(low, high)
+
+    last_close = close[-1]
 
     # BUY
-    if (
-        bullish_engulfing(df) and
-        strong_candle(df) and
-        last["RSI"] < 40 and
-        last["close"] <= last["support"] * 1.003
-    ):
+    if bullish_engulfing(open_,close) and rsi_val < 40 and last_close <= support*1.003:
         return "BUY 🟢"
 
     # SELL
-    if (
-        bearish_engulfing(df) and
-        strong_candle(df) and
-        last["RSI"] > 60 and
-        last["close"] >= last["resistance"] * 0.997
-    ):
+    if bearish_engulfing(open_,close) and rsi_val > 60 and last_close >= resistance*0.997:
         return "SELL 🔴"
 
     return None
@@ -121,30 +89,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== HANDLE =====
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global running
     text = update.message.text
 
-    if text == "▶ Start Scan":
-        running = True
-        await update.message.reply_text("🚀 Auto Scan Started")
-
-    elif text == "⏹ Stop":
-        running = False
-        await update.message.reply_text("⛔ Stopped")
-
-    elif text == "📊 Strong Signal":
+    if text == "📊 Strong Signal":
         for pair in PAIRS:
-            try:
-                df = get_data(pair)
-                if df is None:
-                    continue
+            data = get_data(pair)
+            if not data:
+                continue
 
-                signal = get_signal(df)
+            signal = get_signal(data)
 
-                if signal:
-                    time_now = datetime.now().strftime("%H:%M:%S")
+            if signal:
+                time_now = datetime.now().strftime("%H:%M:%S")
 
-                    msg = f"""📊 STRONG SIGNAL
+                msg = f"""📊 STRONG SIGNAL
 
 Pair: {pair.replace('=X','')}
 Signal: {signal}
@@ -152,13 +110,10 @@ Entry: Next Candle
 Time: {time_now} IST
 """
 
-                    await update.message.reply_text(msg)
-                    return
+                await update.message.reply_text(msg)
+                return
 
-            except Exception as e:
-                print(e)
-
-        await update.message.reply_text("❌ No Strong Signal Found")
+        await update.message.reply_text("❌ No Signal")
 
 # ===== MAIN =====
 if __name__ == "__main__":
@@ -167,5 +122,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT, handle))
 
-    print("🚀 Bot Running...")
+    print("Bot Running...")
     app.run_polling()
