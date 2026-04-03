@@ -1,126 +1,115 @@
+import pandas as pd
 import requests
+import time
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from ta.trend import EMAIndicator
+from ta.momentum import RSIIndicator
 
-TOKEN = "8243137774:AAHCKkESoXOT-Fy0_8hpkAExeiqFzNOc1MQ"
-CHAT_ID = "6181352243"
-PAIRS = [
-    "EURUSD=X","GBPUSD=X","USDJPY=X","AUDUSD=X",
-    "EURJPY=X","GBPJPY=X","EURGBP=X","AUDJPY=X"
+# =========================
+# TELEGRAM CONFIG
+# =========================
+TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
+
+def send_signal(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+
+# =========================
+# PAIRS LIST
+# =========================
+
+REAL_PAIRS = [
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
+    "EURJPY", "GBPJPY", "EURGBP", "AUDJPY", "USDCHF"
 ]
 
-keyboard = [
-    ["▶ Start Scan","⏹ Stop"],
-    ["📊 Strong Signal"]
+OTC_PAIRS = [
+    "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC",
+    "EURJPY-OTC", "GBPJPY-OTC", "EURGBP-OTC", "AUDJPY-OTC", "USDCHF-OTC"
 ]
 
-reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# =========================
+# TIME FILTER (IST)
+# =========================
+def is_good_time():
+    now = datetime.now()
+    hour = now.hour
 
-# ===== GET DATA =====
+    # BEST TIME WINDOWS
+    if 13 <= hour <= 16:   # London
+        return True
+    if 18 <= hour <= 21:   # NY overlap
+        return True
+
+    return False
+
+# =========================
+# DATA (Replace API)
+# =========================
 def get_data(pair):
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?interval=1m&range=1d"
-        data = requests.get(url).json()
+    # Replace with real API
+    data = {
+        "open":  [100,101,102,101,100,99,100],
+        "close": [101,102,101,100,99,100,102],
+        "high":  [102,103,103,102,101,101,103],
+        "low":   [99,100,100,99,98,98,99]
+    }
+    return pd.DataFrame(data)
 
-        candles = data["chart"]["result"][0]["indicators"]["quote"][0]
+# =========================
+# CANDLE LOGIC
+# =========================
+def is_bullish(c):
+    return c['close'] > c['open']
 
-        return candles
+def is_bearish(c):
+    return c['close'] < c['open']
 
-    except:
-        return None
+def is_small(c):
+    body = abs(c['close'] - c['open'])
+    rng = c['high'] - c['low']
+    return body < rng * 0.3
 
-# ===== RSI =====
-def rsi(close, period=14):
-    gains, losses = [], []
+# =========================
+# ANALYSIS
+# =========================
+def analyze_pair(pair):
+    df = get_data(pair)
 
-    for i in range(1, len(close)):
-        diff = close[i] - close[i-1]
-        gains.append(max(diff,0))
-        losses.append(abs(min(diff,0)))
+    df['ema'] = EMAIndicator(df['close'], window=5).ema_indicator()
+    df['rsi'] = RSIIndicator(df['close'], window=5).rsi()
 
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period if sum(losses[-period:]) != 0 else 1
+    last = df.iloc[-1]
 
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-# ===== SUPPORT / RESISTANCE =====
-def support_resistance(low, high):
-    support = min(low[-20:])
-    resistance = max(high[-20:])
-    return support, resistance
-
-# ===== ENGULFING =====
-def bullish_engulfing(o,c):
-    return c[-2]<o[-2] and c[-1]>o[-1] and c[-1]>o[-2] and o[-1]<c[-2]
-
-def bearish_engulfing(o,c):
-    return c[-2]>o[-2] and c[-1]<o[-1] and o[-1]>c[-2] and c[-1]<o[-2]
-
-# ===== SIGNAL =====
-def get_signal(data):
-    close = data["close"]
-    open_ = data["open"]
-    high = data["high"]
-    low = data["low"]
-
-    if None in close[-20:]:
-        return None
-
-    rsi_val = rsi(close)
-    support, resistance = support_resistance(low, high)
-
-    last_close = close[-1]
+    if is_small(last):
+        return
 
     # BUY
-    if bullish_engulfing(open_,close) and rsi_val < 40 and last_close <= support*1.003:
-        return "BUY 🟢"
+    if is_bullish(last) and last['close'] > last['ema'] and last['rsi'] < 60:
+        send_signal(f"🟢 BUY {pair}")
 
     # SELL
-    if bearish_engulfing(open_,close) and rsi_val > 60 and last_close >= resistance*0.997:
-        return "SELL 🔴"
+    elif is_bearish(last) and last['close'] < last['ema'] and last['rsi'] > 40:
+        send_signal(f"🔴 SELL {pair}")
 
-    return None
+# =========================
+# MAIN LOOP
+# =========================
+while True:
 
-# ===== START =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Started", reply_markup=reply_markup)
+    if is_good_time():
+        print("✅ Trading Time Active")
 
-# ===== HANDLE =====
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+        # REAL MARKET
+        for pair in REAL_PAIRS:
+            analyze_pair(pair)
 
-    if text == "📊 Strong Signal":
-        for pair in PAIRS:
-            data = get_data(pair)
-            if not data:
-                continue
+        # OTC (Always optional)
+        for pair in OTC_PAIRS:
+            analyze_pair(pair)
 
-            signal = get_signal(data)
+    else:
+        print("⏸️ Waiting for best time...")
 
-            if signal:
-                time_now = datetime.now().strftime("%H:%M:%S")
-
-                msg = f"""📊 STRONG SIGNAL
-
-Pair: {pair.replace('=X','')}
-Signal: {signal}
-Entry: Next Candle
-Time: {time_now} IST
-"""
-
-                await update.message.reply_text(msg)
-                return
-
-        await update.message.reply_text("❌ No Signal")
-
-# ===== MAIN =====
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT, handle))
-
-    print("Bot Running...")
-    app.run_polling()
+    time.sleep(60)
